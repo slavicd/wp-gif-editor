@@ -35,12 +35,14 @@ class Slavicd_Gif_Editor extends WP_Image_Editor_Imagick
 		$resized = $this->processGif($dst_x, $dst_y, $src_x, $src_y, $dst_w, $dst_h, $src_w, $src_h);
 
 		if ( $resized instanceof Imagick ) {
+			$this->image = $resized;
 			$this->update_size( $dst_w, $dst_h );
 			return $resized;
 		}
 
 		return new WP_Error( 'image_resize_error', __('Image resize failed.'), $this->file );
 	}
+
 
 	/**
 	 * Checks if gifsicle is installed on the system
@@ -116,7 +118,6 @@ class Slavicd_Gif_Editor extends WP_Image_Editor_Imagick
 
 			$imagick = new Imagick();
 			$imagick->readImageBlob($result);
-			$this->image = $imagick;
 
 			return $imagick;
 		} else {
@@ -131,5 +132,163 @@ class Slavicd_Gif_Editor extends WP_Image_Editor_Imagick
 		];
 
 		return self::BINARY_NAME . ' ' . implode(' ', array_merge($defaults, $args));
+	}
+
+	/**
+	 * Streams current image to browser.
+	 *
+	 * @since 3.5.0
+	 * @access public
+	 *
+	 * @param string $mime_type
+	 * @return true|WP_Error
+	 */
+	public function stream( $mime_type = null )
+	{
+		if ($this->mime_type != 'image/gif') {
+			return parent::stream($mime_type);
+		}
+
+		list( $filename, $extension, $mime_type ) = $this->get_output_format( null, $mime_type );
+
+		try {
+			// Temporarily change format for stream
+			$this->image->setImageFormat( strtoupper( $extension ) );
+
+			// Output stream of image content
+			header( "Content-Type: $mime_type" );
+			print $this->image->getImagesBlob();
+
+			// Reset Image to original Format
+			$this->image->setImageFormat( $this->get_extension( $this->mime_type ) );
+		}
+		catch ( Exception $e ) {
+			return new WP_Error( 'image_stream_error', $e->getMessage() );
+		}
+
+		return true;
+	}
+
+	/**
+	 * Overrides gif creations
+	 *
+	 * @param Imagick $image
+	 * @param string $filename
+	 * @param string $mime_type
+	 * @return array|WP_Error
+	 */
+	protected function _save( $image, $filename = null, $mime_type = null )
+	{
+		if ($this->mime_type != 'image/gif') {
+			return parent::_save($image, $filename, $mime_type);
+		}
+
+		list( $filename, $extension, $mime_type ) = $this->get_output_format( $filename, $mime_type );
+
+		if ( ! $filename )
+			$filename = $this->generate_filename( null, null, $extension );
+
+		error_log(date('H:i:s: ') . 'saving ' . $filename . '; ' . sizeof($image) . ' frames' . "\n", 3, ABSPATH . 'gif-edit.log');
+
+		try {
+			// Store initial Format
+			$orig_format = $this->image->getImageFormat();
+
+			$this->image->setImageFormat( strtoupper( $this->get_extension( $mime_type ) ) );
+			$this->make_image( $filename, array( $image, 'writeImages' ), array($filename, true) );
+
+			// Reset original Format
+			$this->image->setImageFormat( $orig_format );
+		}
+		catch ( Exception $e ) {
+			return new WP_Error( 'image_save_error', $e->getMessage(), $filename );
+		}
+
+		// Set correct file permissions
+		$stat = stat( dirname( $filename ) );
+		$perms = $stat['mode'] & 0000666; //same permissions as parent folder, strip off the executable bits
+		@ chmod( $filename, $perms );
+
+		/** This filter is documented in wp-includes/class-wp-image-editor-gd.php */
+		return array(
+			'path'      => $filename,
+			'file'      => wp_basename( apply_filters( 'image_make_intermediate_size', $filename ) ),
+			'width'     => $this->size['width'],
+			'height'    => $this->size['height'],
+			'mime-type' => $mime_type,
+		);
+	}
+
+	/**
+	 * Resize multiple images from a single source.
+	 *
+	 * OVERRIDE CORRECTS A BUG WITH $imagick->getImage() LOSING GIF FRAMES
+	 *
+	 * @since 3.5.0
+	 * @access public
+	 *
+	 * @param array $sizes {
+	 *     An array of image size arrays. Default sizes are 'small', 'medium', 'medium_large', 'large'.
+	 *
+	 *     Either a height or width must be provided.
+	 *     If one of the two is set to null, the resize will
+	 *     maintain aspect ratio according to the provided dimension.
+	 *
+	 *     @type array $size {
+	 *         Array of height, width values, and whether to crop.
+	 *
+	 *         @type int  $width  Image width. Optional if `$height` is specified.
+	 *         @type int  $height Image height. Optional if `$width` is specified.
+	 *         @type bool $crop   Optional. Whether to crop the image. Default false.
+	 *     }
+	 * }
+	 * @return array An array of resized images' metadata by size.
+	 */
+	public function multi_resize( $sizes ) {
+		$metadata = array();
+		$orig_size = $this->size;
+		$orig_image = clone $this->image;
+
+		foreach ( $sizes as $size => $size_data ) {
+			if ( ! $this->image )
+				$this->image = clone $orig_image;
+
+			if ( ! isset( $size_data['width'] ) && ! isset( $size_data['height'] ) ) {
+				continue;
+			}
+
+			if ( ! isset( $size_data['width'] ) ) {
+				$size_data['width'] = null;
+			}
+			if ( ! isset( $size_data['height'] ) ) {
+				$size_data['height'] = null;
+			}
+
+			if ( ! isset( $size_data['crop'] ) ) {
+				$size_data['crop'] = false;
+			}
+
+			$resize_result = $this->resize( $size_data['width'], $size_data['height'], $size_data['crop'] );
+			$duplicate = ( ( $orig_size['width'] == $size_data['width'] ) && ( $orig_size['height'] == $size_data['height'] ) );
+
+			if ( ! is_wp_error( $resize_result ) && ! $duplicate ) {
+				$resized = $this->_save( $this->image );
+
+				$this->image->clear();
+				$this->image->destroy();
+				$this->image = null;
+
+				if ( ! is_wp_error( $resized ) && $resized ) {
+					unset( $resized['path'] );
+					$metadata[$size] = $resized;
+				}
+			}
+
+			$this->size = $orig_size;
+		}
+
+		$this->image = $orig_image;
+
+		return $metadata;
 	}
 }

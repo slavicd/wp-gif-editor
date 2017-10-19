@@ -41,5 +41,7 @@ function image_resize_dimensions($orig_w, $orig_h, $dest_w, $dest_h, $crop) {
 require './class-gif-editor.php';
 
 $editor = new Slavicd_Gif_Editor('input/001.gif');
+
 $editor->resize(375, 195, true);
+
 $editor->image->writeImages('input/001_out.gif', true);
