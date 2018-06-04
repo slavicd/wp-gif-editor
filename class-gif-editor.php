@@ -188,7 +188,7 @@ class Slavicd_Gif_Editor extends WP_Image_Editor_Imagick
 		if ( ! $filename )
 			$filename = $this->generate_filename( null, null, $extension );
 
-		error_log(date('H:i:s: ') . 'saving ' . $filename . '; ' . sizeof($image) . ' frames' . "\n", 3, ABSPATH . 'gif-edit.log');
+		//error_log(date('H:i:s: ') . 'saving ' . $filename . '; ' . sizeof($image) . ' frames' . "\n", 3, ABSPATH . 'gif-edit.log');
 
 		try {
 			// Store initial Format
