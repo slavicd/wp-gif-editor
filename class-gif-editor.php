@@ -36,8 +36,7 @@ class Slavicd_Gif_Editor extends WP_Image_Editor_Imagick
 
 		if ( $resized instanceof Imagick ) {
 			$this->image = $resized;
-			$this->update_size( $dst_w, $dst_h );
-			return $resized;
+			return $this->update_size( $dst_w, $dst_h );
 		}
 
 		return new WP_Error( 'image_resize_error', __('Image resize failed.'), $this->file );
@@ -94,6 +93,7 @@ class Slavicd_Gif_Editor extends WP_Image_Editor_Imagick
 			$args = array_merge($args, $small_gif_args);
 		}
 
+		error_log($this->getCommand($args), LOG_DEBUG);
 		$process = proc_open($this->getCommand($args), $descriptorspec, $pipes);
 
 		if (is_resource($process)) {
@@ -188,7 +188,7 @@ class Slavicd_Gif_Editor extends WP_Image_Editor_Imagick
 		if ( ! $filename )
 			$filename = $this->generate_filename( null, null, $extension );
 
-		//error_log(date('H:i:s: ') . 'saving ' . $filename . '; ' . sizeof($image) . ' frames' . "\n", 3, ABSPATH . 'gif-edit.log');
+		error_log(date('H:i:s: ') . 'saving ' . $filename . '; ' . sizeof($image) . ' frames' . "\n", 3, ABSPATH . 'gif-edit.log');
 
 		try {
 			// Store initial Format
@@ -219,76 +219,63 @@ class Slavicd_Gif_Editor extends WP_Image_Editor_Imagick
 		);
 	}
 
-	/**
-	 * Resize multiple images from a single source.
-	 *
-	 * OVERRIDE CORRECTS A BUG WITH $imagick->getImage() LOSING GIF FRAMES
-	 *
-	 * @since 3.5.0
-	 * @access public
-	 *
-	 * @param array $sizes {
-	 *     An array of image size arrays. Default sizes are 'small', 'medium', 'medium_large', 'large'.
-	 *
-	 *     Either a height or width must be provided.
-	 *     If one of the two is set to null, the resize will
-	 *     maintain aspect ratio according to the provided dimension.
-	 *
-	 *     @type array $size {
-	 *         Array of height, width values, and whether to crop.
-	 *
-	 *         @type int  $width  Image width. Optional if `$height` is specified.
-	 *         @type int  $height Image height. Optional if `$width` is specified.
-	 *         @type bool $crop   Optional. Whether to crop the image. Default false.
-	 *     }
-	 * }
-	 * @return array An array of resized images' metadata by size.
-	 */
-	public function multi_resize( $sizes ) {
-		$metadata = array();
-		$orig_size = $this->size;
-		$orig_image = clone $this->image;
 
-		foreach ( $sizes as $size => $size_data ) {
-			if ( ! $this->image )
-				$this->image = clone $orig_image;
+    /**
+     * Create an image sub-size and return the image meta data value for it.
+     *
+     * OVERRIDE CORRECTS A BUG WITH $imagick->getImage() LOSING GIF FRAMES
+     *
+     * @since 5.3.0
+     *
+     * @param array $size_data {
+     *     Array of size data.
+     *
+     *     @type int  $width  The maximum width in pixels.
+     *     @type int  $height The maximum height in pixels.
+     *     @type bool $crop   Whether to crop the image to exact dimensions.
+     * }
+     * @return array|WP_Error The image data array for inclusion in the `sizes` array in the image meta,
+     *                        WP_Error object on error.
+     */
+    public function make_subsize( $size_data ) {
+        if ( ! isset( $size_data['width'] ) && ! isset( $size_data['height'] ) ) {
+            return new WP_Error( 'image_subsize_create_error', __( 'Cannot resize the image. Both width and height are not set.' ) );
+        }
 
-			if ( ! isset( $size_data['width'] ) && ! isset( $size_data['height'] ) ) {
-				continue;
-			}
+        $orig_size  = $this->size;
+        $orig_image = clone $this->image;
 
-			if ( ! isset( $size_data['width'] ) ) {
-				$size_data['width'] = null;
-			}
-			if ( ! isset( $size_data['height'] ) ) {
-				$size_data['height'] = null;
-			}
+        if ( ! isset( $size_data['width'] ) ) {
+            $size_data['width'] = null;
+        }
 
-			if ( ! isset( $size_data['crop'] ) ) {
-				$size_data['crop'] = false;
-			}
+        if ( ! isset( $size_data['height'] ) ) {
+            $size_data['height'] = null;
+        }
 
-			$resize_result = $this->resize( $size_data['width'], $size_data['height'], $size_data['crop'] );
-			$duplicate = ( ( $orig_size['width'] == $size_data['width'] ) && ( $orig_size['height'] == $size_data['height'] ) );
+        if ( ! isset( $size_data['crop'] ) ) {
+            $size_data['crop'] = false;
+        }
 
-			if ( ! is_wp_error( $resize_result ) && ! $duplicate ) {
-				$resized = $this->_save( $this->image );
+        $resized = $this->resize( $size_data['width'], $size_data['height'], $size_data['crop'] );
 
-				$this->image->clear();
-				$this->image->destroy();
-				$this->image = null;
+        if ( is_wp_error( $resized ) ) {
+            $saved = $resized;
+        } else {
+            $saved = $this->_save( $this->image );
 
-				if ( ! is_wp_error( $resized ) && $resized ) {
-					unset( $resized['path'] );
-					$metadata[$size] = $resized;
-				}
-			}
+            $this->image->clear();
+            $this->image->destroy();
+            $this->image = null;
+        }
 
-			$this->size = $orig_size;
-		}
+        $this->size  = $orig_size;
+        $this->image = $orig_image;
 
-		$this->image = $orig_image;
+        if ( ! is_wp_error( $saved ) ) {
+            unset( $saved['path'] );
+        }
 
-		return $metadata;
-	}
+        return $saved;
+    }
 }
